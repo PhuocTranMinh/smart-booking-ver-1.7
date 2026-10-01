@@ -1293,6 +1293,12 @@ def groq_chat_reply(message: str, identity: dict[str, str], session_id: str) -> 
     return answer
 
 
+def _logged_chat_reply(payload: dict, source: str = "local") -> dict:
+    model = f" model={GROQ_MODEL}" if source == "groq" else ""
+    print(f"CHAT_REPLY source={source}{model}", flush=True)
+    return payload
+
+
 @app.post("/api/chat")
 def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
     message = data.message.strip()
@@ -1300,13 +1306,12 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
     normalized = message.casefold()
     # Short greetings and acknowledgements are fixed UI copy: answer locally, without an AI call.
     if re.fullmatch(r"\s*(xin chào|chào(?: bạn| ad)?|hello|hi|hey)[!.\s]*", normalized):
-        return {"reply": "Chào bạn! 👋 Mình có thể giới thiệu phòng, báo giá hoặc giúp bạn tìm phòng phù hợp. Bạn muốn xem dịch vụ, loại phòng, bảng giá hay bắt đầu đặt phòng?"}
+        return _logged_chat_reply({"reply": "Chào bạn! 👋 Mình có thể giới thiệu phòng, báo giá hoặc giúp bạn tìm phòng phù hợp. Bạn muốn xem dịch vụ, loại phòng, bảng giá hay bắt đầu đặt phòng?"})
     if re.fullmatch(r"\s*(cảm ơn|cam on|cảm ơn nhé|thanks|thank you)[!.\s]*", normalized):
-        return {"reply": "Rất vui được hỗ trợ bạn! Nếu cần, mình có thể xem loại phòng, giá hoặc tìm phòng còn trống."}
+        return _logged_chat_reply({"reply": "Rất vui được hỗ trợ bạn! Nếu cần, mình có thể xem loại phòng, giá hoặc tìm phòng còn trống."})
     if re.fullmatch(r"\s*(tìm phòng phù hợp|tìm phòng|bắt đầu đặt phòng)[!.\s]*", normalized):
         state["local_booking_flow"] = True
-        return {"reply": "Mình sẽ tìm phòng phù hợp cho bạn. Trước tiên, bạn cần phòng cho bao nhiêu người? Sau đó cho mình ngày, giờ bắt đầu và thời lượng." , "needs": ["people", "date", "time", "duration"]}
-
+        return _logged_chat_reply({"reply": "Mình sẽ tìm phòng phù hợp cho bạn. Trước tiên, bạn cần phòng cho bao nhiêu người? Sau đó cho mình ngày, giờ bắt đầu và thời lượng." , "needs": ["people", "date", "time", "duration"]})
     # Carry room type and amenity preferences across turns just like the other booking slots.
     available_rooms = fs_rooms() if FIRESTORE is not None else None
     if available_rooms is None:
@@ -1341,10 +1346,9 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         items = [b for b in fs_bookings() if b.get("user_id") == identity["user_id"]] if FIRESTORE is not None else list_bookings(identity)
         items = sorted(items, key=lambda booking: booking.get("created", ""), reverse=True)[:5]
         if not items:
-            return {"reply": "Bạn chưa có booking nào."}
+            return _logged_chat_reply({"reply": "Bạn chưa có booking nào."})
         lines = ["• #%s · phòng %s · %s · %s" % (b["id"][:8], b["room_id"], b["status"], parse_dt(b["start"]).astimezone().strftime("%d/%m %H:%M")) for b in items]
-        return {"reply": "Booking gần đây của bạn:\n" + "\n".join(lines)}
-
+        return _logged_chat_reply({"reply": "Booking gần đây của bạn:\n" + "\n".join(lines)})
     if re.search(r"(hủy|huy).*(booking|đặt phòng|phòng)|((booking|đặt phòng).*(hủy|huy))", normalized):
         state.pop("pending_confirm", None)
         items = [b for b in fs_bookings() if b.get("user_id") == identity["user_id"] and b.get("status") == "CONFIRMED"] if FIRESTORE is not None else [b for b in list_bookings(identity) if b.get("status") == "CONFIRMED"]
@@ -1354,17 +1358,15 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         if len(items) == 1:
             try:
                 cancel_booking(items[0]["id"], identity)
-                return {"reply": "Đã hủy booking #%s." % items[0]["id"][:8]}
+                return _logged_chat_reply({"reply": "Đã hủy booking #%s." % items[0]["id"][:8]})
             except HTTPException as exc:
-                return {"reply": "Mình chưa thể hủy booking: " + str(exc.detail)}
+                return _logged_chat_reply({"reply": "Mình chưa thể hủy booking: " + str(exc.detail)})
         if items:
-            return {"reply": "Bạn có nhiều booking chưa check-in. Hãy gửi 8 ký tự đầu của mã booking muốn hủy:\n" + "\n".join("• #%s · phòng %s · %s" % (b["id"][:8], b["room_id"], parse_dt(b["start"]).astimezone().strftime("%d/%m %H:%M")) for b in items[:6])}
-        return {"reply": "Hiện không có booking CONFIRMED nào để hủy."}
-
+            return _logged_chat_reply({"reply": "Bạn có nhiều booking chưa check-in. Hãy gửi 8 ký tự đầu của mã booking muốn hủy:\n" + "\n".join("• #%s · phòng %s · %s" % (b["id"][:8], b["room_id"], parse_dt(b["start"]).astimezone().strftime("%d/%m %H:%M")) for b in items[:6])})
+        return _logged_chat_reply({"reply": "Hiện không có booking CONFIRMED nào để hủy."})
     if re.search(r"(dịch vụ|bạn.*giúp.*gì|bạn làm được gì|có thể giúp|có những chức năng gì|cách đặt|check.?in.*qr)", normalized):
         state.pop("pending_confirm", None)
-        return {"reply": "Mình có thể giúp bạn:\n• Giới thiệu phòng, tiện nghi và giá hiện tại.\n• Tìm phòng còn trống theo số người, ngày, giờ và thời lượng.\n• Tạo booking và cấp QR check-in.\n• Điều khiển thiết bị phòng gồm đèn, quạt và loa. Hệ thống nhận telemetry/cập nhật trạng thái qua MQTT; nếu chưa cấu hình broker thì demo mô phỏng qua HTTP.\n\nBạn muốn xem dịch vụ thiết bị, loại phòng, bảng giá hay bắt đầu tìm phòng?"}
-
+        return _logged_chat_reply({"reply": "Mình có thể giúp bạn:\n• Giới thiệu phòng, tiện nghi và giá hiện tại.\n• Tìm phòng còn trống theo số người, ngày, giờ và thời lượng.\n• Tạo booking và cấp QR check-in.\n• Điều khiển thiết bị phòng gồm đèn, quạt và loa. Hệ thống nhận telemetry/cập nhật trạng thái qua MQTT; nếu chưa cấu hình broker thì demo mô phỏng qua HTTP.\n\nBạn muốn xem dịch vụ thiết bị, loại phòng, bảng giá hay bắt đầu tìm phòng?"})
     if re.search(r"(bảng giá|chi phí|mức phí|bao nhiêu (?:tiền|đồng|một giờ)|giá\s*(?:phòng|bao nhiêu|thế nào|ra sao)|phòng\s+[a-d]\d{3}\s+giá)", normalized):
         if FIRESTORE is not None:
             rows = sorted(fs_rooms(), key=lambda room: room.get("hourly_rate", 0))
@@ -1373,9 +1375,9 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
                 rows = [room for room in rows if room_code.group(1).upper() in room.get("name", "").upper()]
             state.pop("pending_confirm", None)
             if not rows:
-                return {"reply": "Mình không tìm thấy phòng đó. Bạn có thể nhắn ‘bảng giá’ để xem giá các phòng hiện có."}
+                return _logged_chat_reply({"reply": "Mình không tìm thấy phòng đó. Bạn có thể nhắn ‘bảng giá’ để xem giá các phòng hiện có."})
             lines = [f"• {r['name']}: {r['hourly_rate']:,}₫/giờ · tối đa {r['capacity']} người" for r in rows]
-            return {"reply": "Giá phòng hiện tại (theo cấu hình hệ thống):\n" + "\n".join(lines) + "\nBạn muốn mình tìm phòng còn trống vào ngày, giờ và thời lượng nào?"}
+            return _logged_chat_reply({"reply": "Giá phòng hiện tại (theo cấu hình hệ thống):\n" + "\n".join(lines) + "\nBạn muốn mình tìm phòng còn trống vào ngày, giờ và thời lượng nào?"})
         with db() as c:
             rows = c.execute("SELECT name,capacity,amenities,hourly_rate FROM rooms ORDER BY hourly_rate").fetchall()
         room_code = re.search(r"\b([a-d]\d{3})\b", normalized)
@@ -1383,23 +1385,21 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
             rows = [r for r in rows if room_code.group(1).upper() in r["name"].upper()]
         state.pop("pending_confirm", None)
         if not rows:
-            return {"reply": "Mình không tìm thấy phòng đó. Bạn có thể nhắn ‘bảng giá’ để xem giá các phòng hiện có."}
+            return _logged_chat_reply({"reply": "Mình không tìm thấy phòng đó. Bạn có thể nhắn ‘bảng giá’ để xem giá các phòng hiện có."})
         lines = [f"• {r['name']}: {r['hourly_rate']:,}₫/giờ · tối đa {r['capacity']} người" for r in rows]
-        return {"reply": "Giá phòng hiện tại (theo cấu hình hệ thống):\n" + "\n".join(lines) + "\nBạn muốn mình tìm phòng còn trống vào ngày, giờ và thời lượng nào?"}
-
+        return _logged_chat_reply({"reply": "Giá phòng hiện tại (theo cấu hình hệ thống):\n" + "\n".join(lines) + "\nBạn muốn mình tìm phòng còn trống vào ngày, giờ và thời lượng nào?"})
     # Informational room questions use the database as the source of truth.
     if re.search(r"(các loại|loại.*phòng|phòng.*loại nào|có.*phòng.*(?:gì|nào)|giới thiệu.*phòng|thông tin.*phòng|danh sách phòng|phòng.*(?:tiện nghi|sức chứa))", normalized):
         state.pop("pending_confirm", None)
         if FIRESTORE is not None:
             rows = sorted(fs_rooms(), key=lambda room: room.get("capacity", 0))
             descriptions = [f"• {r['name']}: tối đa {r['capacity']} người; có {', '.join(r.get('amenities', [])) or 'thiết bị chưa cấu hình'}; {r['hourly_rate']:,}₫/giờ" for r in rows]
-            return {"reply": "Hiện có các phòng sau (thông tin lấy từ hệ thống):\n" + "\n".join(descriptions) + "\nBạn muốn đặt phòng nào? Hãy cho mình biết số người, ngày, giờ bắt đầu và thời lượng."}
+            return _logged_chat_reply({"reply": "Hiện có các phòng sau (thông tin lấy từ hệ thống):\n" + "\n".join(descriptions) + "\nBạn muốn đặt phòng nào? Hãy cho mình biết số người, ngày, giờ bắt đầu và thời lượng."})
         with db() as c:
             rows = [sqlite_room(row) for row in c.execute("SELECT * FROM rooms ORDER BY capacity").fetchall()]
         descriptions = [f"• {r['name']}: tối đa {r['capacity']} người; có {', '.join(r.get('amenities', [])) or 'thiết bị chưa cấu hình'}; {r['hourly_rate']:,}₫/giờ" for r in rows]
-        return {"reply": "Hiện có các phòng sau (thông tin lấy từ hệ thống):\n" + "\n".join(descriptions) + "\nBạn muốn đặt phòng nào? Hãy cho mình biết số người, ngày, giờ bắt đầu và thời lượng."}
-
-    # Known answers and slot-based booking stay local. OpenRouter generates answers
+        return _logged_chat_reply({"reply": "Hiện có các phòng sau (thông tin lấy từ hệ thống):\n" + "\n".join(descriptions) + "\nBạn muốn đặt phòng nào? Hãy cho mình biết số người, ngày, giờ bắt đầu và thời lượng."})
+    # Known answers and slot-based booking stay local. Groq generates answers
     # only for unrecognized free-form questions.
     has_booking_slot = bool(
         re.search(r"\b\d{1,2}\s*(?:người|nguoi|pax)\b", normalized)
@@ -1411,7 +1411,7 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         try:
             answer = groq_chat_reply(message, identity, data.session_id)
             if answer:
-                return {"reply": answer}
+                return _logged_chat_reply({"reply": answer}, source="groq")
         except Exception as exc:
             # Known answers and the local booking flow still work if Groq is unavailable.
             detail = ""
@@ -1458,18 +1458,18 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
                 offset = (target_weekday - local_today.weekday()) % 7 or 7
                 requested_date = local_today + timedelta(days=offset)
         except ValueError:
-            return {"reply": "Ngày bạn nhập không hợp lệ. Hãy ghi ngày/tháng/năm, ví dụ 05/10/2026.", "needs": ["date"]}
+            return _logged_chat_reply({"reply": "Ngày bạn nhập không hợp lệ. Hãy ghi ngày/tháng/năm, ví dụ 05/10/2026.", "needs": ["date"]})
     if requested_date:
         if requested_date < local_today:
             state.pop("date", None); state.pop("start", None); state.pop("end", None); state.pop("pending_confirm", None)
-            return {"reply": "Ngày đó đã qua nên mình không thể tạo booking. Hãy chọn hôm nay hoặc một ngày trong tương lai.", "needs": ["date"]}
+            return _logged_chat_reply({"reply": "Ngày đó đã qua nên mình không thể tạo booking. Hãy chọn hôm nay hoặc một ngày trong tương lai.", "needs": ["date"]})
         state["date"] = requested_date.isoformat()
 
     time_match = re.search(r"\b(?:lúc\s*)?(\d{1,2})\s*(?:h|:)(\d{2})?\b", normalized)
     if time_match:
         hour, minute = int(time_match.group(1)), int(time_match.group(2) or 0)
         if hour > 23 or minute > 59:
-            return {"reply": "Giờ không hợp lệ. Hãy nhập giờ từ 00:00 đến 23:59.", "needs": ["time"]}
+            return _logged_chat_reply({"reply": "Giờ không hợp lệ. Hãy nhập giờ từ 00:00 đến 23:59.", "needs": ["time"]})
         state["time"] = f"{hour:02d}:{minute:02d}"
 
     duration_match = re.search(r"(?:trong\s*)?(?:(\d+(?:[.,]\d+)?)\s*(tiếng|giờ|hours)(?:\s*(?:và\s*)?(\d+)\s*(?:phút|phut))?|(\d+)\s*(phút|phut|min|minutes))", normalized)
@@ -1479,22 +1479,21 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         else:
             minutes = int(duration_match.group(4))
         if minutes < 15 or minutes > 12 * 60:
-            return {"reply": "Thời lượng đặt phòng phải từ 15 phút đến 12 tiếng. Bạn muốn dùng phòng bao lâu?", "needs": ["duration"]}
+            return _logged_chat_reply({"reply": "Thời lượng đặt phòng phải từ 15 phút đến 12 tiếng. Bạn muốn dùng phòng bao lâu?", "needs": ["duration"]})
         state["duration_minutes"] = minutes
 
     if not state.get("people"):
-        return {"reply": "Bạn cần phòng cho bao nhiêu người?", "needs": ["people"]}
+        return _logged_chat_reply({"reply": "Bạn cần phòng cho bao nhiêu người?", "needs": ["people"]})
     if not state.get("date"):
-        return {"reply": "Bạn muốn đặt phòng ngày nào? Hãy ghi ngày/tháng/năm hoặc nói hôm nay/ngày mai.", "needs": ["date"]}
+        return _logged_chat_reply({"reply": "Bạn muốn đặt phòng ngày nào? Hãy ghi ngày/tháng/năm hoặc nói hôm nay/ngày mai.", "needs": ["date"]})
     if not state.get("time"):
-        return {"reply": "Bạn muốn bắt đầu lúc mấy giờ? Ví dụ 14:30.", "needs": ["time"]}
+        return _logged_chat_reply({"reply": "Bạn muốn bắt đầu lúc mấy giờ? Ví dụ 14:30.", "needs": ["time"]})
     if not state.get("duration_minutes"):
-        return {"reply": "Bạn muốn sử dụng phòng trong bao lâu? Ví dụ 90 phút, 2 tiếng hoặc 2 tiếng 30 phút.", "needs": ["duration"]}
-
+        return _logged_chat_reply({"reply": "Bạn muốn sử dụng phòng trong bao lâu? Ví dụ 90 phút, 2 tiếng hoặc 2 tiếng 30 phút.", "needs": ["duration"]})
     start_local = datetime.combine(date.fromisoformat(state["date"]), datetime.strptime(state["time"], "%H:%M").time()).astimezone()
     if start_local <= now().astimezone():
         state.pop("time", None); state.pop("start", None); state.pop("end", None); state.pop("pending_confirm", None)
-        return {"reply": "Giờ bắt đầu đó đã qua. Hãy chọn một giờ trong tương lai (hoặc đổi sang ngày khác).", "needs": ["time"]}
+        return _logged_chat_reply({"reply": "Giờ bắt đầu đó đã qua. Hãy chọn một giờ trong tương lai (hoặc đổi sang ngày khác).", "needs": ["time"]})
     state["start"] = start_local.astimezone(timezone.utc)
     state["end"] = state["start"] + timedelta(minutes=state["duration_minutes"])
     choices = free_rooms(state["start"], state["end"], state["people"], state.get("amenities"))
@@ -1506,7 +1505,7 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
             requirements.append("tiện nghi " + ", ".join(state["amenities"]))
         if room_filter:
             requirements.append("loại/phòng " + room_filter)
-        return {"reply": "Mình chưa tìm thấy phòng trống phù hợp" + (" với " + " và ".join(requirements) if requirements else "") + ". Bạn thử đổi tiện nghi, loại phòng, giờ hoặc số người nhé.", "rooms": []}
+        return _logged_chat_reply({"reply": "Mình chưa tìm thấy phòng trống phù hợp" + (" với " + " và ".join(requirements) if requirements else "") + ". Bạn thử đổi tiện nghi, loại phòng, giờ hoặc số người nhé.", "rooms": []})
     room = choices[0]
     duration_hours = (state["end"] - state["start"]).total_seconds() / 3600
     state.update({"room_id": room["id"], "cost": round(room["hourly_rate"] * duration_hours)})
@@ -1524,15 +1523,13 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
             try:
                 booking = create_booking(BookingIn(room_id=room["id"], start=state["start"], end=state["end"], people=state["people"], idempotency_key="chat-" + uuid.uuid4().hex), identity)
             except HTTPException as exc:
-                return {"reply": "Không thể tạo booking: " + str(exc.detail), "rooms": choices}
+                return _logged_chat_reply({"reply": "Không thể tạo booking: " + str(exc.detail), "rooms": choices})
             state.clear()
-            return {"reply": "Đã tạo booking " + booking["id"][:8] + ". Trạng thái CONFIRMED.", "booking": booking}
+            return _logged_chat_reply({"reply": "Đã tạo booking " + booking["id"][:8] + ". Trạng thái CONFIRMED.", "booking": booking})
         state["pending_confirm"] = True
-        return {"reply": "Trước khi đặt, hãy xác nhận đề xuất: " + summary + " Nhắn ‘xác nhận’ để tiếp tục.", "rooms": choices}
+        return _logged_chat_reply({"reply": "Trước khi đặt, hãy xác nhận đề xuất: " + summary + " Nhắn ‘xác nhận’ để tiếp tục.", "rooms": choices})
     state["pending_confirm"] = True
-    return {"reply": "Đề xuất: " + summary + " Nếu phù hợp, nhắn ‘xác nhận’ để đặt.", "rooms": choices}
-
-
+    return _logged_chat_reply({"reply": "Đề xuất: " + summary + " Nếu phù hợp, nhắn ‘xác nhận’ để đặt.", "rooms": choices})
 @app.get("/api/admin/audit")
 def get_audit(identity: dict[str, str] = Depends(current_user)):
     require_admin(identity["role"])
