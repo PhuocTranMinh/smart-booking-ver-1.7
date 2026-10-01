@@ -1267,11 +1267,10 @@ def openrouter_chat_reply(message: str, identity: dict[str, str], session_id: st
         "max_tokens": 400,
     }
     if OPENROUTER_MODEL == "openrouter/auto-beta":
-        # Use the Beta router's own plugin id. max_price=0 prevents paid
-        # endpoints from being selected; unavailable free routes fall back locally.
+        # Use the Beta router's own plugin id and only allow free model variants.
+        # If no free model fits the request, local chatbot fallback remains available.
         payload["session_id"] = cache_key
-        payload["plugins"] = [{"id": "auto-beta-router"}]
-        payload["provider"] = {"max_price": {"prompt": 0, "completion": 0}}
+        payload["plugins"] = [{"id": "auto-beta-router", "allowed_models": ["*/*:free"]}]
     request = urllib.request.Request(
         OPENROUTER_CHAT_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -1419,7 +1418,15 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
                 return {"reply": answer}
         except Exception as exc:
             # Known answers and the local booking flow still work if OpenRouter is unavailable.
-            print("OpenRouter chat unavailable (%s): %s" % (type(exc).__name__, str(exc)), flush=True)
+            detail = ""
+            if hasattr(exc, "read"):
+                try:
+                    detail = exc.read().decode("utf-8", errors="replace")[:500]
+                except Exception:
+                    pass
+            print("OpenRouter chat unavailable (%s): %s%s" % (
+                type(exc).__name__, str(exc), ("; response=" + detail) if detail else ""
+            ), flush=True)
 
     if has_booking_slot:
         state["local_booking_flow"] = True
