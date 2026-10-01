@@ -845,7 +845,7 @@ def home():
 
 @app.get("/api/health")
 def health():
-    ai_status = {"ai_provider": "openrouter", "ai_enabled": bool(os.getenv("OPENROUTER_API_KEY", "").strip()), "ai_model": OPENROUTER_MODEL}
+    ai_status = {"ai_provider": "groq", "ai_enabled": bool(os.getenv("GROQ_API_KEY", "").strip()), "ai_model": GROQ_MODEL}
     if FIRESTORE is None:
         return {"status": "ok", "database": "sqlite", "firestore_connected": False, **ai_status}
     try:
@@ -1240,13 +1240,13 @@ def command_devices(room_id: int, data: DeviceCommandIn, identity: dict[str, str
     return {"ok": True, "room_id": room_id, "devices": data.devices, **transport}
 
 
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/auto-beta")
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
-def openrouter_chat_reply(message: str, identity: dict[str, str], session_id: str) -> Optional[str]:
+def groq_chat_reply(message: str, identity: dict[str, str], session_id: str) -> Optional[str]:
     """Generate free-form replies for messages not handled by local rules."""
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         return None
     cache_key = identity["user_id"] + ":" + hashlib.sha256(session_id.encode()).hexdigest()
@@ -1261,24 +1261,20 @@ def openrouter_chat_reply(message: str, identity: dict[str, str], session_id: st
         "Với câu hỏi ngoài phạm vi đặt phòng, có thể trả lời kiến thức chung nhưng nêu rõ khi không chắc chắn."
     )
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": GROQ_MODEL,
         "messages": [{"role": "system", "content": system_prompt}, *history, {"role": "user", "content": message[:2000]}],
-        "temperature": 0.5,
-        "max_tokens": 400,
+        "max_completion_tokens": 400,
     }
-    if OPENROUTER_MODEL == "openrouter/auto-beta":
-        # Use the Beta router's own plugin id and only allow free model variants.
-        # If no free model fits the request, local chatbot fallback remains available.
-        payload["session_id"] = cache_key
-        payload["plugins"] = [{"id": "auto-beta-router", "allowed_models": ["*/*:free"]}]
     request = urllib.request.Request(
-        OPENROUTER_CHAT_URL,
+        GROQ_CHAT_URL,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
             "Authorization": "Bearer " + api_key,
             "Content-Type": "application/json",
-            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
-            "X-Title": "Smart Study Room",
+            "Accept": "application/json",
+            # urllib's default Python-urllib user agent can be rejected by
+            # upstream bot checks; identify this API client explicitly.
+            "User-Agent": "SmartStudyRoom/1.0",
         },
         method="POST",
     )
@@ -1411,20 +1407,20 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         or re.search(r"\b\d{1,2}\s*(?:h|:)\s*\d{0,2}\b", normalized)
         or re.search(r"\d+(?:[.,]\d+)?\s*(?:tiếng|giờ|hours|phút|phut|min|minutes)", normalized)
     )
-    if os.getenv("OPENROUTER_API_KEY", "").strip() and not state.get("local_booking_flow") and not has_booking_slot:
+    if os.getenv("GROQ_API_KEY", "").strip() and not state.get("local_booking_flow") and not has_booking_slot:
         try:
-            answer = openrouter_chat_reply(message, identity, data.session_id)
+            answer = groq_chat_reply(message, identity, data.session_id)
             if answer:
                 return {"reply": answer}
         except Exception as exc:
-            # Known answers and the local booking flow still work if OpenRouter is unavailable.
+            # Known answers and the local booking flow still work if Groq is unavailable.
             detail = ""
             if hasattr(exc, "read"):
                 try:
                     detail = exc.read().decode("utf-8", errors="replace")[:500]
                 except Exception:
                     pass
-            print("OpenRouter chat unavailable (%s): %s%s" % (
+            print("Groq chat unavailable (%s): %s%s" % (
                 type(exc).__name__, str(exc), ("; response=" + detail) if detail else ""
             ), flush=True)
 
