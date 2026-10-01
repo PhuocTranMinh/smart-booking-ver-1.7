@@ -1304,6 +1304,10 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
     message = data.message.strip()
     state = CHAT.setdefault(identity["user_id"] + ":" + data.session_id, {})
     normalized = message.casefold()
+    time_range_match = re.search(
+        r"\btừ\s*(?P<from_hour>\d{1,2})(?:(?:h|:)(?P<from_min>\d{1,2})?|(?:\s*giờ))?\s*(?P<from_period>sáng|trưa|chiều|tối)?\s*(?:đến|tới|den|toi|[-–]|to)\s*(?P<to_hour>\d{1,2})(?:(?:h|:)(?P<to_min>\d{1,2})?|(?:\s*giờ))?\s*(?P<to_period>sáng|trưa|chiều|tối)?\b",
+        normalized,
+    )
     # Short greetings and acknowledgements are fixed UI copy: answer locally, without an AI call.
     if re.fullmatch(r"\s*(xin chào|chào(?: bạn| ad)?|hello|hi|hey)[!.\s]*", normalized):
         return _logged_chat_reply({"reply": "Chào bạn! 👋 Mình có thể giới thiệu phòng, báo giá hoặc giúp bạn tìm phòng phù hợp. Bạn muốn xem dịch vụ, loại phòng, bảng giá hay bắt đầu đặt phòng?"})
@@ -1405,6 +1409,7 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         re.search(r"\b\d{1,2}\s*(?:người|nguoi|pax)\b", normalized)
         or re.search(r"\b(?:hôm nay|hom nay|ngày mai|ngay mai|mai|ngày kia|ngay kia|mốt|mot|20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}(?:[/-]20\d{2})?|thứ\s*[2-7]|chủ nhật)\b", normalized)
         or re.search(r"\b\d{1,2}\s*(?:h|:)\s*\d{0,2}\b", normalized)
+        or time_range_match
         or re.search(r"\d+(?:[.,]\d+)?\s*(?:tiếng|giờ|hours|phút|phut|min|minutes)", normalized)
     )
     if os.getenv("GROQ_API_KEY", "").strip() and not state.get("local_booking_flow") and not has_booking_slot:
@@ -1465,6 +1470,34 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
             return _logged_chat_reply({"reply": "Ngày đó đã qua nên mình không thể tạo booking. Hãy chọn hôm nay hoặc một ngày trong tương lai.", "needs": ["date"]})
         state["date"] = requested_date.isoformat()
 
+    if time_range_match:
+        def range_time_minutes(hour_group: str, minute_group: str, period_group: str) -> int:
+            hour = int(time_range_match.group(hour_group))
+            minute = int(time_range_match.group(minute_group) or 0)
+            period = time_range_match.group(period_group)
+            if hour > 23 or minute > 59:
+                raise ValueError("invalid time")
+            if period in ("chiều", "tối") and hour < 12:
+                hour += 12
+            elif period == "sáng" and hour == 12:
+                hour = 0
+            elif period == "trưa" and hour < 11:
+                hour += 12
+            return hour * 60 + minute
+
+        try:
+            start_minutes = range_time_minutes("from_hour", "from_min", "from_period")
+            end_minutes = range_time_minutes("to_hour", "to_min", "to_period")
+        except ValueError:
+            return _logged_chat_reply({"reply": "Khoảng giờ chưa hợp lệ. Hãy nhập ví dụ: từ 14:00 tới 16:30.", "needs": ["time"]})
+        if end_minutes <= start_minutes:
+            end_minutes += 24 * 60
+        duration_minutes = end_minutes - start_minutes
+        if duration_minutes < 15 or duration_minutes > 12 * 60:
+            return _logged_chat_reply({"reply": "Thời lượng tính từ khoảng giờ phải từ 15 phút đến 12 tiếng. Hãy gửi lại giờ bắt đầu và giờ kết thúc.", "needs": ["time", "duration"]})
+        state["time"] = f"{start_minutes // 60 % 24:02d}:{start_minutes % 60:02d}"
+        state["duration_minutes"] = duration_minutes
+
     time_match = re.search(r"\b(?:lúc\s*)?(\d{1,2})\s*(?:h|:)(\d{2})?\b", normalized)
     if time_match:
         hour, minute = int(time_match.group(1)), int(time_match.group(2) or 0)
@@ -1473,7 +1506,7 @@ def chat(data: ChatIn, identity: dict[str, str] = Depends(current_user)):
         state["time"] = f"{hour:02d}:{minute:02d}"
 
     duration_match = re.search(r"(?:trong\s*)?(?:(\d+(?:[.,]\d+)?)\s*(tiếng|giờ|hours)(?:\s*(?:và\s*)?(\d+)\s*(?:phút|phut))?|(\d+)\s*(phút|phut|min|minutes))", normalized)
-    if duration_match:
+    if duration_match and not time_range_match:
         if duration_match.group(1):
             minutes = round(float(duration_match.group(1).replace(",", ".")) * 60) + int(duration_match.group(3) or 0)
         else:
